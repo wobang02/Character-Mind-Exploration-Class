@@ -1,0 +1,15 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply antialiased text-slate-800;
+    font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Pretendard", "Malgun Gothic", "맑은 고딕", sans-serif;
+  }
+}
+
+/* 초등학생을 위한 부드러운 스크롤 및 둥근 모서리 스타일 */
+input, textarea, button {
+  -webkit-tap-highlight-color: transparent;
+}
