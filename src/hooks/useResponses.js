@@ -3,26 +3,24 @@ import {
   collection, 
   query, 
   where, 
-  orderBy, 
   onSnapshot, 
   addDoc, 
   serverTimestamp 
 } from 'firebase/firestore';
-import * as XLSX from 'xlsx';
 import { db, isFirebaseConfigured } from '../firebase';
 
 /**
  * 학생들의 제출 답안을 실시간으로 구독하고 답안을 제출/엑셀로 내보내는 커스텀 훅
- * @param {string} sessionId 세션 ID (기본값: 'class_1')
+ * @param {string} sessionId 세션 ID (기본값: '3-1')
  */
-export function useResponses(sessionId = 'class_1') {
+export function useResponses(sessionId = '3-1') {
   const [responses, setResponses] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
   useEffect(() => {
-    // Firebase 미설정 시 로컬스토리지 기반 Mock 모드
-    if (!isFirebaseConfigured) {
+    // 1. Firebase 미설정 또는 db null인 경우: 안전한 로컬스토리지 Mock 모드
+    if (!isFirebaseConfigured || !db) {
       const loadMockResponses = () => {
         const raw = localStorage.getItem(`mock_responses_${sessionId}`);
         if (raw) {
@@ -32,13 +30,11 @@ export function useResponses(sessionId = 'class_1') {
             console.error(e);
           }
         } else {
-          // 데모용 샘플 학생 데이터 기본 제공 (인물 마음 탐구 예시)
+          // 데모용 샘플 학생 데이터 기본 제공
           const sampleData = [
-            { id: '1', sessionId, studentName: '김지민', step: 1, answer: '심청이가 바다에 빠지기 전 심청전의 주인공 심청이를 골랐어요.', createdAt: new Date(Date.now() - 1000 * 60 * 5).toISOString() },
-            { id: '2', sessionId, studentName: '이서준', step: 1, answer: '흥부와 놀부 이야기에서 박을 타는 흥부를 선택했습니다.', createdAt: new Date(Date.now() - 1000 * 60 * 4).toISOString() },
-            { id: '3', sessionId, studentName: '박하은', step: 2, answer: '아버지를 다시는 못 볼 수도 있다는 생각에 가슴이 찢어지듯 슬펐을 것 같아요.', createdAt: new Date(Date.now() - 1000 * 60 * 3).toISOString() },
-            { id: '4', sessionId, studentName: '최우진', step: 2, answer: '가난하지만 착하게 살면 언젠가 좋은 일이 생길 거라며 희망을 품었을 것입니다.', createdAt: new Date(Date.now() - 1000 * 60 * 2).toISOString() },
-            { id: '5', sessionId, studentName: '정예린', step: 3, answer: '심청아, 너의 효심은 정말 대단하지만 네 목숨도 소중해! 꼭 살아 돌아와 줘.', createdAt: new Date(Date.now() - 1000 * 60 * 1).toISOString() },
+            { id: '1', sessionId, studentName: '김지민', step: 1, answer: '심청전의 심청이를 골랐어요. 아버지를 위하는 모습이 인상 깊었습니다.', createdAt: new Date(Date.now() - 1000 * 60 * 5).toLocaleTimeString('ko-KR') },
+            { id: '2', sessionId, studentName: '이서준', step: 1, answer: '흥부와 놀부 이야기에서 박을 타는 착한 흥부를 선택했습니다.', createdAt: new Date(Date.now() - 1000 * 60 * 4).toLocaleTimeString('ko-KR') },
+            { id: '3', sessionId, studentName: '박하은', step: 2, answer: '아버지를 두고 떠나야 해서 가슴이 찢어지듯 슬프지만 효도하고 싶은 마음이었을 것 같아요.', createdAt: new Date(Date.now() - 1000 * 60 * 3).toLocaleTimeString('ko-KR') },
           ];
           setResponses(sampleData);
           localStorage.setItem(`mock_responses_${sessionId}`, JSON.stringify(sampleData));
@@ -53,6 +49,7 @@ export function useResponses(sessionId = 'class_1') {
       return () => window.removeEventListener('mock_response_added', handleStorageChange);
     }
 
+    // 2. Firebase 실제 연동 모드
     try {
       const q = query(
         collection(db, 'responses'),
@@ -78,7 +75,6 @@ export function useResponses(sessionId = 'class_1') {
             };
           });
 
-          // 최신순 정렬
           list.sort((a, b) => (b.rawTimestamp || 0) - (a.rawTimestamp || 0));
           setResponses(list);
           setLoading(false);
@@ -100,17 +96,13 @@ export function useResponses(sessionId = 'class_1') {
 
   /**
    * 학생 답안 제출
-   * @param {Object} param0 
-   * @param {string} param0.studentName 학생 이름
-   * @param {number} param0.step 활동 단계
-   * @param {string} param0.answer 제출 답안
    */
   const submitAnswer = async ({ studentName, step, answer }) => {
     if (!studentName || !answer) {
       throw new Error("학생 이름과 답안을 모두 입력해주세요.");
     }
 
-    if (!isFirebaseConfigured) {
+    if (!isFirebaseConfigured || !db) {
       const newResponse = {
         id: 'mock_' + Date.now(),
         sessionId,
@@ -143,46 +135,57 @@ export function useResponses(sessionId = 'class_1') {
   };
 
   /**
-   * 수집된 학생 데이터를 엑셀(.xlsx) 파일로 내보내기
-   * @param {Array} dataList 내보낼 데이터 목록 (기본값: 현재 세션의 전체 responses)
-   * @param {string} customFileName 파일 이름
+   * 브라우저 호환 100% 안전한 엑셀(CSV UTF-8 BOM) 다운로드
+   * (외부 무거운 모듈 번들 에러로 인한 흰 화면 방지)
    */
-  const exportToExcel = (dataList = responses, customFileName = '') => {
+  const exportToExcel = async (dataList = responses, customFileName = '') => {
     if (!dataList || dataList.length === 0) {
       alert("다운로드할 학생 데이터가 아직 없습니다.");
       return;
     }
 
-    // 엑셀 시트에 맞는 한국어 친화적 컬럼 구성 (초등학교 수업용)
-    const exportData = dataList.map((item, index) => ({
-      번호: index + 1,
-      학생이름: item.studentName || '익명',
-      활동단계: `Step ${item.step}`,
-      제출내용: item.answer || '',
-      제출시간: item.createdAt || '',
-      수업세션: item.sessionId || sessionId,
-    }));
-
-    // SheetJS를 이용해 워크시트 및 워크북 생성
-    const worksheet = XLSX.utils.json_to_sheet(exportData);
-    
-    // 컬럼 너비 자동 조정
-    worksheet['!cols'] = [
-      { wch: 6 },  // 번호
-      { wch: 12 }, // 학생이름
-      { wch: 12 }, // 활동단계
-      { wch: 50 }, // 제출내용
-      { wch: 22 }, // 제출시간
-      { wch: 12 }, // 수업세션
-    ];
-
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, '학생_답안_모음');
-
     const dateStr = new Date().toISOString().slice(0, 10);
-    const fileName = customFileName || `인물마음탐구_수업결과_${sessionId}_${dateStr}.xlsx`;
+    const fileName = customFileName || `인물마음탐구_수업결과_${sessionId}_${dateStr}`;
 
-    XLSX.writeFile(workbook, fileName);
+    // 1. XLSX 동적 임포트 시도 (번들링 충돌 방지)
+    try {
+      const XLSX = await import('xlsx');
+      if (XLSX && XLSX.utils) {
+        const exportData = dataList.map((item, index) => ({
+          번호: index + 1,
+          학생이름: item.studentName || '익명',
+          활동단계: `Step ${item.step}`,
+          제출내용: item.answer || '',
+          제출시간: item.createdAt || '',
+          수업코드: item.sessionId || sessionId,
+        }));
+        const worksheet = XLSX.utils.json_to_sheet(exportData);
+        const workbook = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(workbook, worksheet, '학생_답안');
+        XLSX.writeFile(workbook, `${fileName}.xlsx`);
+        return;
+      }
+    } catch (e) {
+      console.warn("XLSX 모듈 로드 실패, 안전한 표준 CSV 방식으로 전환합니다:", e);
+    }
+
+    // 2. 대체 방식: 엑셀에서 바로 열리는 UTF-8 BOM CSV 생성 (100% 안전)
+    let csvContent = '\uFEFF'; // Excel 한글 깨짐 방지용 BOM
+    csvContent += "번호,학생이름,활동단계,제출내용,제출시간,수업코드\n";
+
+    dataList.forEach((item, index) => {
+      const cleanAnswer = (item.answer || '').replace(/"/g, '""').replace(/\n/g, ' ');
+      csvContent += `${index + 1},"${item.studentName}","Step ${item.step}","${cleanAnswer}","${item.createdAt}","${item.sessionId || sessionId}"\n`;
+    });
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement("a");
+    const url = URL.createObjectURL(blob);
+    link.setAttribute("href", url);
+    link.setAttribute("download", `${fileName}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
   return {

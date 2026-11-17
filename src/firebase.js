@@ -1,17 +1,5 @@
-import { initializeApp, getApps, getApp, deleteApp } from 'firebase/app';
+import { initializeApp, getApps } from 'firebase/app';
 import { getFirestore, doc, collection } from 'firebase/firestore';
-
-/**
- * 기본 Firebase 환경 설정 (GitHub Secrets 환경변수 또는 모의 기본값)
- */
-const defaultFirebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "AIzaSy_MOCK_KEY_FOR_DEV",
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || "mock-school-app.firebaseapp.com",
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || "mock-school-app",
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || "mock-school-app.appspot.com",
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || "1234567890",
-  appId: import.meta.env.VITE_FIREBASE_APP_ID || "1:1234567890:web:abcdef123456"
-};
 
 /**
  * 로컬스토리지에 저장된 사용자 정의(선생님 개인) Firebase Config 가져오기
@@ -34,7 +22,7 @@ export function getStoredCustomConfig() {
 export function saveCustomConfig(config) {
   try {
     localStorage.setItem('custom_firebase_config', JSON.stringify(config));
-    window.location.reload(); // 새 설정 적용을 위한 새로고침
+    window.location.reload();
   } catch (e) {
     console.error("커스텀 설정 저장 실패:", e);
   }
@@ -48,33 +36,54 @@ export function resetCustomConfig() {
   window.location.reload();
 }
 
-// 실제 활성화할 설정 (커스텀 설정 우선, 없으면 기본 설정)
+// 1. 활성화할 설정 추출 (커스텀 설정 우선, 없으면 환경 변수)
 const customConfig = getStoredCustomConfig();
-export const activeFirebaseConfig = customConfig || defaultFirebaseConfig;
+const envApiKey = import.meta.env.VITE_FIREBASE_API_KEY;
+const envProjectId = import.meta.env.VITE_FIREBASE_PROJECT_ID;
 
-// Firebase 환경 변수 또는 커스텀 키 설정 여부 확인
+// 실제 유효한 Firebase 키가 존재하는지 엄격히 검사 (MOCK 키나 빈 값 제외)
 export const isFirebaseConfigured = Boolean(
   (customConfig && customConfig.apiKey && customConfig.projectId) ||
-  (import.meta.env.VITE_FIREBASE_API_KEY && import.meta.env.VITE_FIREBASE_PROJECT_ID)
+  (envApiKey && envApiKey !== "AIzaSy_MOCK_KEY_FOR_DEV" && envProjectId && envProjectId !== "mock-school-app")
 );
 
-// Firebase App 초기화
-const appName = customConfig ? 'custom-school-app' : '[DEFAULT]';
-let app;
-try {
-  const existingApps = getApps();
-  const found = existingApps.find(a => a.name === appName);
-  app = found ? found : initializeApp(activeFirebaseConfig, appName === '[DEFAULT]' ? undefined : appName);
-} catch (e) {
-  console.warn("Firebase App 초기화 중 경고:", e);
-  app = getApps()[0] || initializeApp(activeFirebaseConfig);
+export const activeFirebaseConfig = customConfig || (isFirebaseConfigured ? {
+  apiKey: envApiKey,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  projectId: envProjectId,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID
+} : null);
+
+// 2. Firebase App & Firestore 안전 초기화
+let app = null;
+let firestoreDb = null;
+
+if (isFirebaseConfigured && activeFirebaseConfig) {
+  try {
+    const existingApps = getApps();
+    const appName = customConfig ? 'custom-school-app' : '[DEFAULT]';
+    const found = existingApps.find(a => a.name === appName);
+    app = found ? found : initializeApp(activeFirebaseConfig, appName === '[DEFAULT]' ? undefined : appName);
+    firestoreDb = getFirestore(app);
+  } catch (err) {
+    console.warn("Firebase 연결 실패 (오프라인 로컬 모드로 전환됩니다):", err);
+    firestoreDb = null;
+  }
+} else {
+  console.info("💡 Firebase 설정이 없습니다. 웹앱이 안전한 [오프라인 모의 모드]로 작동합니다.");
 }
 
-// Firestore 인스턴스
-export const db = getFirestore(app);
+export const db = firestoreDb;
 
-// 자주 사용하는 컬렉션 및 문서 참조 헬퍼
-export const getSessionDocRef = (sessionId = 'class_1') => doc(db, 'sessions', sessionId);
-export const getResponsesCollectionRef = () => collection(db, 'responses');
+// 참조 헬퍼 (db가 null일 경우 안전하게 null 반환)
+export const getSessionDocRef = (sessionId = 'class_1') => {
+  return db ? doc(db, 'sessions', sessionId) : null;
+};
+
+export const getResponsesCollectionRef = () => {
+  return db ? collection(db, 'responses') : null;
+};
 
 export default app;

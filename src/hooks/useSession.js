@@ -1,12 +1,12 @@
 import { useState, useEffect } from 'react';
 import { onSnapshot, setDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
-import { getSessionDocRef, isFirebaseConfigured } from '../firebase';
+import { getSessionDocRef, isFirebaseConfigured, db } from '../firebase';
 
 /**
  * 수업 세션(현재 단계 및 진행 상태)을 실시간으로 구독하고 제어하는 커스텀 훅
- * @param {string} sessionId 세션 ID (기본값: 'class_1')
+ * @param {string} sessionId 세션 ID (기본값: '3-1')
  */
-export function useSession(sessionId = 'class_1') {
+export function useSession(sessionId = '3-1') {
   const [session, setSession] = useState({
     currentStep: 0,
     isActive: true,
@@ -15,9 +15,8 @@ export function useSession(sessionId = 'class_1') {
   const [error, setError] = useState(null);
 
   useEffect(() => {
-    // Firebase 설정이 되어있지 않은 로컬 테스트 환경의 경우 기본값 유지
-    if (!isFirebaseConfigured) {
-      console.warn("Firebase 환경 변수가 설정되지 않아 로컬 모의(Mock) 세션으로 동작합니다.");
+    // 1. Firebase 설정이 없거나 db가 null인 경우: 안전한 로컬스토리지 Mock 세션
+    if (!isFirebaseConfigured || !db) {
       const savedMock = localStorage.getItem(`mock_session_${sessionId}`);
       if (savedMock) {
         try {
@@ -27,80 +26,87 @@ export function useSession(sessionId = 'class_1') {
         }
       }
       setLoading(false);
-      return;
+
+      const handleStorageChange = () => {
+        const updated = localStorage.getItem(`mock_session_${sessionId}`);
+        if (updated) {
+          try {
+            setSession(JSON.parse(updated));
+          } catch (e) {}
+        }
+      };
+      window.addEventListener('mock_session_changed', handleStorageChange);
+      return () => window.removeEventListener('mock_session_changed', handleStorageChange);
     }
 
-    const sessionRef = getSessionDocRef(sessionId);
-
-    // 실시간 상태 구독
-    const unsubscribe = onSnapshot(
-      sessionRef,
-      (docSnap) => {
-        if (docSnap.exists()) {
-          setSession(docSnap.data());
-        } else {
-          // 세션 문서가 없으면 초기값으로 생성
-          const initialData = {
-            currentStep: 0,
-            isActive: true,
-            createdAt: serverTimestamp(),
-            updatedAt: serverTimestamp(),
-          };
-          setDoc(sessionRef, initialData, { merge: true }).catch((err) => {
-            console.error("초기 세션 생성 실패:", err);
-          });
-          setSession(initialData);
-        }
+    // 2. Firebase 실제 구독
+    try {
+      const sessionRef = getSessionDocRef(sessionId);
+      if (!sessionRef) {
         setLoading(false);
-      },
-      (err) => {
-        console.error("세션 실시간 구독 오류:", err);
-        setError(err);
-        setLoading(false);
+        return;
       }
-    );
 
-    return () => unsubscribe();
+      const unsubscribe = onSnapshot(
+        sessionRef,
+        (docSnap) => {
+          if (docSnap.exists()) {
+            setSession(docSnap.data());
+          } else {
+            const initialData = {
+              currentStep: 0,
+              isActive: true,
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp(),
+            };
+            setDoc(sessionRef, initialData, { merge: true }).catch((err) => {
+              console.error("초기 세션 생성 실패:", err);
+            });
+            setSession(initialData);
+          }
+          setLoading(false);
+        },
+        (err) => {
+          console.error("세션 실시간 구독 오류:", err);
+          setError(err);
+          setLoading(false);
+        }
+      );
+
+      return () => unsubscribe();
+    } catch (err) {
+      console.error("useSession 초기화 에러:", err);
+      setError(err);
+      setLoading(false);
+    }
   }, [sessionId]);
 
-  /**
-   * 화면 단계(currentStep) 변경
-   * @param {number} newStep 변경할 스텝 번호
-   */
   const updateStep = async (newStep) => {
-    if (!isFirebaseConfigured) {
-      const updated = { ...session, currentStep: newStep };
+    const stepNum = Number(newStep);
+    if (!isFirebaseConfigured || !db) {
+      const updated = { ...session, currentStep: stepNum };
       setSession(updated);
       localStorage.setItem(`mock_session_${sessionId}`, JSON.stringify(updated));
-      // 같은 브라우저 탭 간 동기화를 위한 커스텀 이벤트
       window.dispatchEvent(new Event('mock_session_changed'));
       return;
     }
 
     try {
       const sessionRef = getSessionDocRef(sessionId);
-      await updateDoc(sessionRef, {
-        currentStep: Number(newStep),
-        updatedAt: serverTimestamp(),
-      });
+      if (sessionRef) {
+        await setDoc(sessionRef, {
+          currentStep: stepNum,
+          isActive: true,
+          updatedAt: serverTimestamp(),
+        }, { merge: true });
+      }
     } catch (err) {
       console.error("화면 단계 업데이트 실패:", err);
-      // 문서가 없는 경우 setDoc으로 재시도
-      const sessionRef = getSessionDocRef(sessionId);
-      await setDoc(sessionRef, {
-        currentStep: Number(newStep),
-        isActive: true,
-        updatedAt: serverTimestamp(),
-      }, { merge: true });
     }
   };
 
-  /**
-   * 수업 활성화/비활성화 토글
-   * @param {boolean} isActive
-   */
   const toggleActive = async (isActive) => {
-    if (!isFirebaseConfigured) {
+    if (!isFirebaseConfigured || !db) {
       const updated = { ...session, isActive };
       setSession(updated);
       localStorage.setItem(`mock_session_${sessionId}`, JSON.stringify(updated));
@@ -110,10 +116,12 @@ export function useSession(sessionId = 'class_1') {
 
     try {
       const sessionRef = getSessionDocRef(sessionId);
-      await updateDoc(sessionRef, {
-        isActive,
-        updatedAt: serverTimestamp(),
-      });
+      if (sessionRef) {
+        await updateDoc(sessionRef, {
+          isActive,
+          updatedAt: serverTimestamp(),
+        });
+      }
     } catch (err) {
       console.error("수업 상태 변경 실패:", err);
     }
