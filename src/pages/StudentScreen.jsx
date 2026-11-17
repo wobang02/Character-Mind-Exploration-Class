@@ -23,6 +23,7 @@ export default function StudentScreen() {
   const { submitAnswer } = useResponses(sessionId);
 
   const [answerText, setAnswerText] = useState('');
+  const [isComposing, setIsComposing] = useState(false); // 한글 IME 조합 중 여부
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submittedSteps, setSubmittedSteps] = useState({});
   const [lastSubmittedAnswer, setLastSubmittedAnswer] = useState('');
@@ -184,7 +185,17 @@ export default function StudentScreen() {
                 <textarea
                   rows={5}
                   value={answerText}
-                  onChange={(e) => setAnswerText(e.target.value)}
+                  onChange={(e) => {
+                    // 한글 IME 조합 중에는 state 업데이트를 미뤄 자모 분리 버그 방지
+                    if (!isComposing) {
+                      setAnswerText(e.target.value);
+                    }
+                  }}
+                  onCompositionStart={() => setIsComposing(true)}
+                  onCompositionEnd={(e) => {
+                    setIsComposing(false);
+                    setAnswerText(e.target.value); // 조합 완료 후 최종값 반영
+                  }}
                   placeholder={currentStepInfo.placeholder}
                   className="w-full p-4 rounded-2xl border-2 border-slate-200 focus:border-indigo-500 focus:outline-none focus:ring-4 focus:ring-indigo-100 text-base text-slate-800 placeholder-slate-400 transition-all shadow-inner resize-none leading-relaxed"
                 />

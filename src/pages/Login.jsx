@@ -12,6 +12,17 @@ export default function Login() {
   const [teacherPassword, setTeacherPassword] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
 
+  // 한글 IME 조합 중 state 업데이트를 막아 자모 분리 버그 방지
+  const [isComposing, setIsComposing] = useState(false);
+
+  const handleKoreanChange = (setter) => (e) => {
+    if (!isComposing) setter(e.target.value);
+  };
+  const handleCompositionEnd = (setter) => (e) => {
+    setIsComposing(false);
+    setter(e.target.value);
+  };
+
   // URL 파라미터(?room=xxx)가 있으면 자동으로 방 코드 채우기
   useEffect(() => {
     const params = new URLSearchParams(location.search);
@@ -133,7 +144,9 @@ export default function Login() {
               <input
                 type="text"
                 value={roomCode}
-                onChange={(e) => setRoomCode(e.target.value)}
+                onChange={handleKoreanChange(setRoomCode)}
+                onCompositionStart={() => setIsComposing(true)}
+                onCompositionEnd={handleCompositionEnd(setRoomCode)}
                 placeholder="예: 3-1 또는 5학년2반"
                 className="w-full px-4 py-3 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-amber-400 text-slate-800 text-sm font-semibold"
               />
@@ -147,7 +160,9 @@ export default function Login() {
               <input
                 type="text"
                 value={studentName}
-                onChange={(e) => { setStudentName(e.target.value); setErrorMsg(''); }}
+                onChange={handleKoreanChange((v) => { setStudentName(v); setErrorMsg(''); })}
+                onCompositionStart={() => setIsComposing(true)}
+                onCompositionEnd={handleCompositionEnd((v) => { setStudentName(v); setErrorMsg(''); })}
                 placeholder="예: 15번 김민수"
                 maxLength={15}
                 autoFocus
